@@ -8,6 +8,7 @@ given commit. It will then run tests against this version and will send back the
 results to the dispatcher. It will then wait for further instruction from the
 dispatcher.
 """
+import click
 import argparse
 import errno
 import os
@@ -82,29 +83,27 @@ class TestHandler(SocketServer.BaseRequestHandler):
                             "results:%s:%s:%s" % (commit_id, len(output), output))
 
 
-def serve():
+@click.command()
+@click.option("--host",
+        default="localhost",
+        help="runner's host, by default it uses localhost",
+        )
+@click.option("--port",
+        default=-1,
+        type=int,
+        help="runner's port, by default it uses values >= 8900"
+        )
+@click.option("--dispatcher-server",
+        default="localhost:8888",
+        help="dispatcher host:port, by default it uses localhost:8888")
+@click.argument("repo", nargs=1)
+def serve(host, port, dispatcher_server, repo):
     range_start = 8900
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--host",
-                        help="runner's host, by default it uses localhost",
-                        default="localhost",
-                        action="store")
-    parser.add_argument("--port",
-                        help="runner's port, by default it uses values >=%s" % range_start,
-                        action="store")
-    parser.add_argument("--dispatcher-server",
-                        help="dispatcher host:port, by default it uses " \
-                        "localhost:8888",
-                        default="localhost:8888",
-                        action="store")
-    parser.add_argument("repo", metavar="REPO", type=str,
-                        help="path to the repository this will observe")
-    args = parser.parse_args()
 
-    runner_host = args.host
+    runner_host = host
     runner_port = None
     tries = 0
-    if not args.port:
+    if port < 0:
         runner_port = range_start
         while tries < 100:
             try:
@@ -123,11 +122,11 @@ def serve():
         else:
             raise Exception("Could not bind to ports in range %s-%s" % (range_start, range_start+tries))
     else:
-        runner_port = int(args.port)
+        runner_port = int(port)
         server = ThreadingTCPServer((runner_host, runner_port), TestHandler)
-    server.repo_folder = args.repo
+    server.repo_folder = repo
 
-    dispatcher_host, dispatcher_port = args.dispatcher_server.split(":")
+    dispatcher_host, dispatcher_port = dispatcher_server.split(":")
     server.dispatcher_server = {"host":dispatcher_host, "port":dispatcher_port}
     response = helpers.communicate(server.dispatcher_server["host"],
                                    int(server.dispatcher_server["port"]),
@@ -147,7 +146,7 @@ def serve():
                     response = helpers.communicate(
                                        server.dispatcher_server["host"],
                                        int(server.dispatcher_server["port"]),
-                                       "status")
+                                       "status:heartbeat")
                     if response != "OK":
                         print "Dispatcher is no longer functional"
                         server.shutdown()

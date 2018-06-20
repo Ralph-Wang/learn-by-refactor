@@ -40,7 +40,7 @@ def poll(dispatcher_server, poll_interval, repo):
             try:
                 response = helpers.communicate(dispatcher_host,
                                                int(dispatcher_port),
-                                               "status:check")
+                                               "status:heartbeat")
             except socket.error as e:
                 raise Exception("Could not communicate with dispatcher server: %s" % e)
             if response == "OK":
