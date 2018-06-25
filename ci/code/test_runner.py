@@ -9,7 +9,6 @@ results to the dispatcher. It will then wait for further instruction from the
 dispatcher.
 """
 import click
-import argparse
 import errno
 import os
 import re
@@ -82,6 +81,26 @@ class TestHandler(SocketServer.BaseRequestHandler):
                             int(self.server.dispatcher_server["port"]),
                             "results:%s:%s:%s" % (commit_id, len(output), output))
 
+def dispatcher_checker(server):
+    # Checks if the dispatcher went down. If it is down, we will shut down
+    # if since the dispatcher may not have the same host/port
+    # when it comes back up.
+    while not server.dead:
+        time.sleep(5)
+        if (time.time() - server.last_communication) > 10:
+            try:
+                response = helpers.communicate(
+                                   server.dispatcher_server["host"],
+                                   int(server.dispatcher_server["port"]),
+                                   "status:heartbeat")
+                if response != "OK":
+                    print "Dispatcher is no longer functional"
+                    server.shutdown()
+                    return
+            except socket.error as e:
+                print "Can't communicate with dispatcher: %s" % e
+                server.shutdown()
+                return
 
 @click.command()
 @click.option("--host",
@@ -134,27 +153,6 @@ def serve(host, port, dispatcher_server, repo):
                                    (runner_host, runner_port))
     if response != "OK":
         raise Exception("Can't register with dispatcher!")
-
-    def dispatcher_checker(server):
-        # Checks if the dispatcher went down. If it is down, we will shut down
-        # if since the dispatcher may not have the same host/port
-        # when it comes back up.
-        while not server.dead:
-            time.sleep(5)
-            if (time.time() - server.last_communication) > 10:
-                try:
-                    response = helpers.communicate(
-                                       server.dispatcher_server["host"],
-                                       int(server.dispatcher_server["port"]),
-                                       "status:heartbeat")
-                    if response != "OK":
-                        print "Dispatcher is no longer functional"
-                        server.shutdown()
-                        return
-                except socket.error as e:
-                    print "Can't communicate with dispatcher: %s" % e
-                    server.shutdown()
-                    return
 
     t = threading.Thread(target=dispatcher_checker, args=(server,))
     try:

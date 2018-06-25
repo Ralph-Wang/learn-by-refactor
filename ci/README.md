@@ -27,4 +27,4 @@
 
 2. update status comand message, use the same format `<command>:<message>` as others
 
-3. 
+3. move out the inner method *dispatcher\_checker*
