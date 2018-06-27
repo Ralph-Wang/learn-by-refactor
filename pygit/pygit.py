@@ -5,7 +5,7 @@ Read the story here: http://benhoyt.com/writings/pygit/
 Released under a permissive MIT license (see LICENSE.txt).
 """
 
-import argparse, collections, difflib, enum, hashlib, operator, os, stat
+import click, collections, difflib, enum, hashlib, operator, os, stat
 import struct, sys, time, urllib.request, zlib
 
 
@@ -35,16 +35,6 @@ def write_file(path, data):
     """Write data bytes to file at given path."""
     with open(path, 'wb') as f:
         f.write(data)
-
-
-def init(repo):
-    """Create directory for repo and initialize .git directory."""
-    os.mkdir(repo)
-    os.mkdir(os.path.join(repo, '.git'))
-    for name in ['objects', 'refs', 'refs/heads']:
-        os.mkdir(os.path.join(repo, '.git', name))
-    write_file(os.path.join(repo, '.git', 'HEAD'), b'ref: refs/heads/master')
-    print('initialized empty repository: {}'.format(repo))
 
 
 def hash_object(data, obj_type, write=True):
@@ -96,7 +86,7 @@ def read_object(sha1_prefix):
     return (obj_type, data)
 
 
-def cat_file(mode, sha1_prefix):
+def _cat_file(mode, sha1_prefix):
     """Write the contents of (or info about) object with given SHA-1 prefix to
     stdout. If mode is 'commit', 'tree', or 'blob', print raw data bytes of
     object. If mode is 'size', print the size of the object. If mode is
@@ -154,7 +144,7 @@ def read_index():
     return entries
 
 
-def ls_files(details=False):
+def _ls_files(details=False):
     """Print list of files in index (including mode, SHA-1, and stage number
     if "details" is True).
     """
@@ -190,7 +180,7 @@ def get_status():
     return (sorted(changed), sorted(new), sorted(deleted))
 
 
-def status():
+def _status():
     """Show status of working copy."""
     changed, new, deleted = get_status()
     if changed:
@@ -205,27 +195,6 @@ def status():
         print('deleted files:')
         for path in deleted:
             print('   ', path)
-
-
-def diff():
-    """Show diff of files changed (between index and working copy)."""
-    changed, _, _ = get_status()
-    entries_by_path = {e.path: e for e in read_index()}
-    for i, path in enumerate(changed):
-        sha1 = entries_by_path[path].sha1.hex()
-        obj_type, data = read_object(sha1)
-        assert obj_type == 'blob'
-        index_lines = data.decode().splitlines()
-        working_lines = read_file(path).decode().splitlines()
-        diff_lines = difflib.unified_diff(
-                index_lines, working_lines,
-                '{} (index)'.format(path),
-                '{} (working copy)'.format(path),
-                lineterm='')
-        for line in diff_lines:
-            print(line)
-        if i < len(changed) - 1:
-            print('-' * 70)
 
 
 def write_index(entries):
@@ -244,25 +213,6 @@ def write_index(entries):
     all_data = header + b''.join(packed_entries)
     digest = hashlib.sha1(all_data).digest()
     write_file(os.path.join('.git', 'index'), all_data + digest)
-
-
-def add(paths):
-    """Add all file paths to git index."""
-    paths = [p.replace('\\', '/') for p in paths]
-    all_entries = read_index()
-    entries = [e for e in all_entries if e.path not in paths]
-    for path in paths:
-        sha1 = hash_object(read_file(path), 'blob')
-        st = os.stat(path)
-        flags = len(path.encode())
-        assert flags < (1 << 12)
-        entry = IndexEntry(
-                int(st.st_ctime), 0, int(st.st_mtime), 0, st.st_dev,
-                st.st_ino, st.st_mode, st.st_uid, st.st_gid, st.st_size,
-                bytes.fromhex(sha1), flags, path)
-        entries.append(entry)
-    entries.sort(key=operator.attrgetter('path'))
-    write_index(entries)
 
 
 def write_tree():
@@ -284,38 +234,6 @@ def get_local_master_hash():
         return read_file(master_path).decode().strip()
     except FileNotFoundError:
         return None
-
-
-def commit(message, author=None):
-    """Commit the current state of the index to master with given message.
-    Return hash of commit object.
-    """
-    tree = write_tree()
-    parent = get_local_master_hash()
-    if author is None:
-        author = '{} <{}>'.format(
-                os.environ['GIT_AUTHOR_NAME'], os.environ['GIT_AUTHOR_EMAIL'])
-    timestamp = int(time.mktime(time.localtime()))
-    utc_offset = -time.timezone
-    author_time = '{} {}{:02}{:02}'.format(
-            timestamp,
-            '+' if utc_offset > 0 else '-',
-            abs(utc_offset) // 3600,
-            (abs(utc_offset) // 60) % 60)
-    lines = ['tree ' + tree]
-    if parent:
-        lines.append('parent ' + parent)
-    lines.append('author {} {}'.format(author, author_time))
-    lines.append('committer {} {}'.format(author, author_time))
-    lines.append('')
-    lines.append(message)
-    lines.append('')
-    data = '\n'.join(lines).encode()
-    sha1 = hash_object(data, 'commit')
-    master_path = os.path.join('.git', 'refs', 'heads', 'master')
-    write_file(master_path, (sha1 + '\n').encode())
-    print('committed to master: {:7}'.format(sha1))
-    return sha1
 
 
 def extract_lines(data):
@@ -468,7 +386,26 @@ def create_pack(objects):
     return data
 
 
-def push(git_url, username=None, password=None):
+@click.group()
+def git():
+    ## entry
+    pass
+
+@git.command(help="show status of the working copy")
+def status():
+    _status()
+
+@git.command(help="push master branch to given git server URL")
+@click.option("-u", "--username",
+        help='username to use for authentication (uses GIT_USERNAME '
+        'environment variable by default)')
+@click.option("-p", "--password",
+        help='password to use for authentication (uses GIT_PASSWORD '
+        'environment variable by default)')
+@click.argument("git_url",
+        # help='URL of git repo, eg: https://github.com/benhoyt/pygit.git',
+        nargs = 1)
+def push(git_url, username, password):
     """Push master branch to given git repo URL."""
     if username is None:
         username = os.environ['GIT_USERNAME']
@@ -494,98 +431,144 @@ def push(git_url, username=None, password=None):
         "expected line 2 b'ok refs/heads/master\n', got: {}".format(lines[1])
     return (remote_sha1, missing)
 
-
-if __name__ == '__main__':
-    parser = argparse.ArgumentParser()
-    sub_parsers = parser.add_subparsers(dest='command', metavar='command')
-    sub_parsers.required = True
-
-    sub_parser = sub_parsers.add_parser('add',
-            help='add file(s) to index')
-    sub_parser.add_argument('paths', nargs='+', metavar='path',
-            help='path(s) of files to add')
-
-    sub_parser = sub_parsers.add_parser('cat-file',
-            help='display contents of object')
-    valid_modes = ['commit', 'tree', 'blob', 'size', 'type', 'pretty']
-    sub_parser.add_argument('mode', choices=valid_modes,
-            help='object type (commit, tree, blob) or display mode (size, '
-                 'type, pretty)')
-    sub_parser.add_argument('hash_prefix',
-            help='SHA-1 hash (or hash prefix) of object to display')
-
-    sub_parser = sub_parsers.add_parser('commit',
-            help='commit current state of index to master branch')
-    sub_parser.add_argument('-a', '--author',
-            help='commit author in format "A U Thor <author@example.com>" '
-                 '(uses GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL environment '
-                 'variables by default)')
-    sub_parser.add_argument('-m', '--message', required=True,
-            help='text of commit message')
-
-    sub_parser = sub_parsers.add_parser('diff',
-            help='show diff of files changed (between index and working '
-                 'copy)')
-
-    sub_parser = sub_parsers.add_parser('hash-object',
-            help='hash contents of given path (and optionally write to '
-                 'object store)')
-    sub_parser.add_argument('path',
-            help='path of file to hash')
-    sub_parser.add_argument('-t', choices=['commit', 'tree', 'blob'],
-            default='blob', dest='type',
-            help='type of object (default %(default)r)')
-    sub_parser.add_argument('-w', action='store_true', dest='write',
-            help='write object to object store (as well as printing hash)')
-
-    sub_parser = sub_parsers.add_parser('init',
-            help='initialize a new repo')
-    sub_parser.add_argument('repo',
-            help='directory name for new repo')
-
-    sub_parser = sub_parsers.add_parser('ls-files',
-            help='list files in index')
-    sub_parser.add_argument('-s', '--stage', action='store_true',
+@git.command('ls-files',
+        help='list files in index')
+@click.option("-s", "--stage", is_flag=True,
             help='show object details (mode, hash, and stage number) in '
                  'addition to path')
+def ls_files(stage):
+    _ls_files(stage)
 
-    sub_parser = sub_parsers.add_parser('push',
-            help='push master branch to given git server URL')
-    sub_parser.add_argument('git_url',
-            help='URL of git repo, eg: https://github.com/benhoyt/pygit.git')
-    sub_parser.add_argument('-p', '--password',
-            help='password to use for authentication (uses GIT_PASSWORD '
-                 'environment variable by default)')
-    sub_parser.add_argument('-u', '--username',
-            help='username to use for authentication (uses GIT_USERNAME '
-                 'environment variable by default)')
+@git.command(help='initialize a new repo')
+@click.argument("repo",
+        # help='directory name for new repo'
+        )
+def init(repo):
+    """Create directory for repo and initialize .git directory."""
+    os.mkdir(repo)
+    os.mkdir(os.path.join(repo, '.git'))
+    for name in ['objects', 'refs', 'refs/heads']:
+        os.mkdir(os.path.join(repo, '.git', name))
+    write_file(os.path.join(repo, '.git', 'HEAD'), b'ref: refs/heads/master')
+    print('initialized empty repository: {}'.format(repo))
 
-    sub_parser = sub_parsers.add_parser('status',
-            help='show status of working copy')
 
-    args = parser.parse_args()
-    if args.command == 'add':
-        add(args.paths)
-    elif args.command == 'cat-file':
-        try:
-            cat_file(args.mode, args.hash_prefix)
-        except ValueError as error:
-            print(error, file=sys.stderr)
-            sys.exit(1)
-    elif args.command == 'commit':
-        commit(args.message, author=args.author)
-    elif args.command == 'diff':
-        diff()
-    elif args.command == 'hash-object':
-        sha1 = hash_object(read_file(args.path), args.type, write=args.write)
-        print(sha1)
-    elif args.command == 'init':
-        init(args.repo)
-    elif args.command == 'ls-files':
-        ls_files(details=args.stage)
-    elif args.command == 'push':
-        push(args.git_url, username=args.username, password=args.password)
-    elif args.command == 'status':
-        status()
-    else:
-        assert False, 'unexpected command {!r}'.format(args.command)
+@git.command("hash-object",
+            help='hash contents of given path (and optionally write to '
+                 'object store)')
+@click.option("-t", "--type", type=click.Choice(["commit", "tree", "blob"]),
+        default="blob", help='type of object (default %(default)r)')
+@click.option("-w", "--write", is_flag=True,
+            help='write object to object store (as well as printing hash)')
+@click.argument("path",
+            # help='path of file to hash')
+            )
+def hash_object_command(path, type, write):
+    sha1 = hash_object(read_file(path), type, write=write)
+    print(sha1)
+
+@git.command("diff",
+        help='show diff of files changed (between index and working '
+        'copy)')
+def diff():
+    """Show diff of files changed (between index and working copy)."""
+    changed, _, _ = get_status()
+    entries_by_path = {e.path: e for e in read_index()}
+    for i, path in enumerate(changed):
+        sha1 = entries_by_path[path].sha1.hex()
+        obj_type, data = read_object(sha1)
+        assert obj_type == 'blob'
+        index_lines = data.decode().splitlines()
+        working_lines = read_file(path).decode().splitlines()
+        diff_lines = difflib.unified_diff(
+                index_lines, working_lines,
+                '{} (index)'.format(path),
+                '{} (working copy)'.format(path),
+                lineterm='')
+        for line in diff_lines:
+            print(line)
+        if i < len(changed) - 1:
+            print('-' * 70)
+
+
+@git.command("commit",
+        help='commit current state of index to master branch')
+@click.option("-a", "--author",
+        help='commit author in format "A U Thor <author@example.com>" '
+        '(uses GIT_AUTHOR_NAME and GIT_AUTHOR_EMAIL environment '
+        'variables by default)')
+@click.option("-m", "--message", required=True,
+        help='text of commit message')
+def commit(message, author):
+    """Commit the current state of the index to master with given message.
+    Return hash of commit object.
+    """
+    tree = write_tree()
+    parent = get_local_master_hash()
+    if author is None:
+        author = '{} <{}>'.format(
+                os.environ['GIT_AUTHOR_NAME'], os.environ['GIT_AUTHOR_EMAIL'])
+    timestamp = int(time.mktime(time.localtime()))
+    utc_offset = -time.timezone
+    author_time = '{} {}{:02}{:02}'.format(
+            timestamp,
+            '+' if utc_offset > 0 else '-',
+            abs(utc_offset) // 3600,
+            (abs(utc_offset) // 60) % 60)
+    lines = ['tree ' + tree]
+    if parent:
+        lines.append('parent ' + parent)
+    lines.append('author {} {}'.format(author, author_time))
+    lines.append('committer {} {}'.format(author, author_time))
+    lines.append('')
+    lines.append(message)
+    lines.append('')
+    data = '\n'.join(lines).encode()
+    sha1 = hash_object(data, 'commit')
+    master_path = os.path.join('.git', 'refs', 'heads', 'master')
+    write_file(master_path, (sha1 + '\n').encode())
+    print('committed to master: {:7}'.format(sha1))
+    return sha1
+
+@git.command("cat-file",
+        help='display contents of object')
+@click.argument("mode", nargs=1,
+        type=click.Choice([ 'commit', 'tree', 'blob', 'size', 'type', 'pretty']),
+        # help='object type (commit, tree, blob) or display mode (size, '
+        #      'type, pretty)'
+        )
+@click.argument("hash_prefix",
+        # help='SHA-1 hash (or hash prefix) of object to display')
+        )
+def cat_file(mode, hash_prefix):
+    try:
+        _cat_file(mode, hash_prefix)
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        sys.exit(1)
+
+@git.command("add",
+        help='add file(s) to index')
+@click.argument("paths", nargs=-1, metavar="path",
+        # help='path(s) of files to add'
+        )
+def add(paths):
+    """Add all file paths to git index."""
+    paths = [p.replace('\\', '/') for p in paths]
+    all_entries = read_index()
+    entries = [e for e in all_entries if e.path not in paths]
+    for path in paths:
+        sha1 = hash_object(read_file(path), 'blob')
+        st = os.stat(path)
+        flags = len(path.encode())
+        assert flags < (1 << 12)
+        entry = IndexEntry(
+                int(st.st_ctime), 0, int(st.st_mtime), 0, st.st_dev,
+                st.st_ino, st.st_mode, st.st_uid, st.st_gid, st.st_size,
+                bytes.fromhex(sha1), flags, path)
+        entries.append(entry)
+    entries.sort(key=operator.attrgetter('path'))
+    write_index(entries)
+
+if __name__ == '__main__':
+    git()

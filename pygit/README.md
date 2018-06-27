@@ -4,3 +4,5 @@
 [The Blog](https://benhoyt.com/writings/pygit/)
 
 # Refactor Logs
+
+1. click again. : )
