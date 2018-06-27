@@ -439,7 +439,7 @@ def push(git_url, username, password):
 def ls_files(stage):
     _ls_files(stage)
 
-@git.command(help='initialize a new repo')
+@git.command("init", help='initialize a new repo')
 @click.argument("repo",
         # help='directory name for new repo'
         )
@@ -556,8 +556,10 @@ def add(paths):
     """Add all file paths to git index."""
     paths = [p.replace('\\', '/') for p in paths]
     all_entries = read_index()
+    # exclude the index which have the same name with path
     entries = [e for e in all_entries if e.path not in paths]
     for path in paths:
+        # hash the file content with blob type
         sha1 = hash_object(read_file(path), 'blob')
         st = os.stat(path)
         flags = len(path.encode())
