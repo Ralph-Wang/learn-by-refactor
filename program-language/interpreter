@@ -1,0 +1,200 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+from __future__ import print_function
+import sys
+import codecs
+import string
+import enum
+
+LETTERS = string.ascii_letters
+DIGITS = string.digits
+OPERATOR = "+-*/"
+
+
+class NamedEnum(enum.Enum):
+    def _generate_next_value_(name, start, count, last_values):
+        return name
+
+@enum.unique
+class TokenType(NamedEnum):
+    STRING = enum.auto()
+    IDENTIFIER = enum.auto()
+    OPERATOR = enum.auto()
+    INTEGER = enum.auto()
+
+
+class Token(object):
+
+    def __init__(self, typ, value):
+        self.type = typ
+        self.value = value
+
+class Lexer(object):
+    def __init__(self, text):
+        self.text = text
+        self.pos = 0
+        self.current_c = self.text[self.pos]
+
+    def advance(self):
+        self.pos += 1
+        self.current_c = self.text[self.pos] if self.pos < len(self.text) else None
+
+    def make_tokens(self):
+        tokens = []
+        while self.current_c is not None:
+            if self.current_c.isspace():
+                self.advance()
+                continue
+
+            if self.current_c == '"':
+                tokens.append(self.string())
+
+            if self.current_c in LETTERS:
+                tokens.append(self.identifier())
+
+            if self.current_c in OPERATOR:
+                tokens.append(self.operator())
+
+            if self.current_c in DIGITS:
+                tokens.append(self.integer())
+
+
+            self.advance()
+        return tokens
+
+    def integer(self):
+        value = []
+        while self.current_c in DIGITS:
+            value.append(self.current_c)
+            self.advance()
+        return Token(TokenType.INTEGER, ''.join(value))
+
+    def operator(self):
+        token = Token(TokenType.OPERATOR, self.current_c)
+        self.advance()
+        return token
+
+    def identifier(self):
+        value = []
+        while self.current_c in LETTERS + DIGITS:
+            value.append(self.current_c)
+            self.advance()
+        return Token(TokenType.IDENTIFIER, ''.join(value))
+
+    def string(self):
+        self.advance()
+        value = []
+        while self.current_c != '"':
+            value.append(self.current_c)
+            self.advance()
+        self.advance()
+        return Token(TokenType.STRING, ''.join(value))
+
+class ProgramTree(object):
+    def __init__(self, statements):
+        self.statements = statements
+
+    def __iter__(self):
+        for root in self.statements:
+            yield root
+
+
+class ExpressionNode(object):
+    def visit(self):
+        raise NotImplementedError("Not implmented in ExpressionNode")
+
+    def __str__(self):
+        return '{}'.format(self.__class__.__name__)
+
+
+class PrintNode(ExpressionNode):
+    def __init__(self, node):
+        self.node = node
+
+    def visit(self):
+        print(self.node.visit())
+
+class StringNode(ExpressionNode):
+    def __init__(self, value):
+        self.value = value
+
+    def visit(self):
+        return self.value
+
+class IntNode(ExpressionNode):
+    def __init__(self, value):
+        self.value = int(value)
+
+    def visit(self):
+        return self.value
+
+
+class Parser(object):
+    def __init__(self, tokens):
+        self.tokens = tokens
+        self.index = 0
+
+    def eat(self, token_types):
+        token = self.tokens[self.index]
+        if token.type in token_types:
+            self.index += 1
+            return token
+
+
+    def parse(self):
+        return self.program()
+
+    def program(self):
+        return ProgramTree(self.statements())
+
+    def statements(self):
+        statements = []
+        while self.index < len(self.tokens):
+            func_token = self.eat({TokenType.IDENTIFIER})
+            if func_token.value.upper() == 'PRINT':
+                value_token = self.eat({TokenType.STRING, TokenType.INTEGER})
+                if value_token.type == TokenType.STRING:
+                    node = StringNode(value_token.value)
+                else:
+                    node = IntNode(value_token.value)
+                statements.append(PrintNode(node))
+        return statements
+
+
+
+class Interpreter(object):
+    def __init__(self, program_tree):
+        self.tree = program_tree
+
+    def visit(self):
+        for root in self.tree:
+            root.visit()
+
+
+
+def main():
+    script = sys.argv[1]
+    with codecs.open(script, 'r') as fobj:
+        code = fobj.read()
+    lexer = Lexer(code)
+    tokens = lexer.make_tokens()
+
+    print('lexer step:')
+    for token in tokens:
+        print("Type:", token.type)
+        print("Value:", token.value)
+        print("-" * 20)
+
+    print('parser step:')
+    parser = Parser(tokens)
+    tree = parser.parse()
+    for root in tree:
+        print(root)
+
+    print('interpreter step:')
+    interpreter = Interpreter(tree)
+    interpreter.visit()
+
+if __name__ == "__main__":
+    main()
